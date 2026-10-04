@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Text.Json;
 using Microsoft.Data.Sqlite;
 
 namespace Campfire.Web.Identity;
@@ -118,6 +119,40 @@ public static class Accounts
         command.Parameters.AddWithValue("$updated", timestamp);
         command.ExecuteNonQuery();
         return LastInsertRowId(connection, transaction);
+    }
+
+    /// <summary>
+    /// <c>Account.settings.restrict_room_creation_to_administrators?</c>.
+    /// Missing, false, and the string <c>"false"</c> are unrestricted. Boolean true and <c>"true"</c> restrict.
+    /// </summary>
+    public static bool RestrictsRoomCreation(string? settings)
+    {
+        if (string.IsNullOrWhiteSpace(settings))
+        {
+            return false;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(settings);
+            if (!document.RootElement.TryGetProperty("restrict_room_creation_to_administrators", out var value))
+            {
+                return false;
+            }
+
+            return value.ValueKind switch
+            {
+                JsonValueKind.True => true,
+                JsonValueKind.False => false,
+                JsonValueKind.String => string.Equals(value.GetString(), "true", StringComparison.OrdinalIgnoreCase),
+                JsonValueKind.Number => value.TryGetInt32(out var number) && number != 0,
+                _ => false,
+            };
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
     }
 
     public static bool IsSingletonViolation(SqliteException exception)

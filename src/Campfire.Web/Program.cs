@@ -27,6 +27,7 @@ FirstRunEndpoints.Map(app);
 SessionEndpoints.Map(app);
 UserEndpoints.Map(app);
 AccountEndpoints.Map(app);
+RoomEndpoints.Map(app);
 
 app.Run();
 

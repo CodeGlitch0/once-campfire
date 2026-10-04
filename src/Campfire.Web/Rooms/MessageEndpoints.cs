@@ -18,12 +18,16 @@ public static class MessageEndpoints
         app.MapPost("/rooms/{roomId:long}/messages", Create);
         app.MapGet("/rooms/{roomId:long}/messages/new", New);
         app.MapGet("/rooms/{roomId:long}/messages/{id:long}", Show);
+        app.MapGet("/rooms/{roomId:long}/messages/{id:long}/attachment", ShowAttachment);
         app.MapGet("/rooms/{roomId:long}/messages/{id:long}/edit", Edit);
         app.MapMethods("/rooms/{roomId:long}/messages/{id:long}", ["PUT", "PATCH"], Update);
         app.MapDelete("/rooms/{roomId:long}/messages/{id:long}", Destroy);
     }
 
-    public static string RenderMessages(long roomId, IReadOnlyList<MessageRow> messages)
+    public static string RenderMessages(
+        long roomId,
+        IReadOnlyList<MessageRow> messages,
+        IReadOnlyDictionary<long, string>? attachments = null)
     {
         var room = roomId.ToString(CultureInfo.InvariantCulture);
         var items = string.Concat(messages.Select(message =>
@@ -31,10 +35,17 @@ public static class MessageEndpoints
             var id = message.Id.ToString(CultureInfo.InvariantCulture);
             var client = Responses.Encode(message.ClientMessageId);
             var body = Responses.Encode(message.Body);
+            var file = "";
+            if (attachments is not null && attachments.TryGetValue(message.Id, out var filename))
+            {
+                file = $"<a class=\"message__attachment\" href=\"/rooms/{room}/messages/{id}/attachment\">{Responses.Encode(filename)}</a>";
+            }
+
             return $"""
                 <article id="message_{client}" class="message" data-message-id="{id}" data-client-message-id="{client}">
                 <a class="message__permalink" href="/rooms/{room}/@{id}">{id}</a>
                 <div class="message__body">{body}</div>
+                {file}
                 </article>
                 """;
         }));
@@ -78,7 +89,7 @@ public static class MessageEndpoints
             return Results.StatusCode(StatusCodes.Status204NoContent);
         }
 
-        return Responses.Html(Frame("Messages", RenderMessages(roomId, page)));
+        return Responses.Html(Frame("Messages", RenderMessages(roomId, page, AttachmentNames(scoped.Connection!, page))));
     }
 
     private static async Task<IResult> Create(long roomId, HttpContext context, CampfireDatabase database)
@@ -103,13 +114,16 @@ public static class MessageEndpoints
         var clientId = PostedForm.Has(form, context.Request.Query, "message[client_message_id]")
             ? PostedForm.Optional(form, context.Request.Query, "message[client_message_id]") ?? ""
             : null;
+        var upload = await PostedForm.AnyFile(form, "message[attachment]");
         var message = MessageStore.Create(
             connection,
             roomId,
             userId,
             PostedForm.Optional(form, context.Request.Query, "message[body]"),
-            clientId);
-        return Responses.Html(Frame("Message", RenderMessages(roomId, [message])));
+            clientId,
+            attachment: upload,
+            filesRoot: Attachments.FilesRoot(database.Path));
+        return Responses.Html(Frame("Message", RenderMessages(roomId, [message], AttachmentNames(connection, [message]))));
     }
 
     private static IResult New(long roomId, HttpContext context, CampfireDatabase database)
@@ -137,7 +151,54 @@ public static class MessageEndpoints
             return Results.NotFound();
         }
 
-        return Responses.Html(Frame("Message", RenderMessages(roomId, [message.Value])));
+        return Responses.Html(Frame("Message", RenderMessages(roomId, [message.Value], AttachmentNames(scoped.Connection!, [message.Value]))));
+    }
+
+    private static IResult ShowAttachment(long roomId, long id, HttpContext context, CampfireDatabase database)
+    {
+        using var scoped = RequireMember(context, database, roomId);
+        if (scoped.Denied is not null)
+        {
+            return scoped.Denied;
+        }
+
+        if (MessageStore.FindInRoom(scoped.Connection!, roomId, id) is null)
+        {
+            return Results.NotFound();
+        }
+
+        var stored = Attachments.Read(
+            scoped.Connection!,
+            Attachments.FilesRoot(database.Path),
+            Attachments.MessageType,
+            id,
+            Attachments.AttachmentName);
+        if (stored is null)
+        {
+            return Results.NotFound();
+        }
+
+        return ServeAttachment(stored.Value.Bytes);
+    }
+
+    private static IResult ServeAttachment(byte[] bytes)
+    {
+        var sniffed = ImageSniff.Detect(bytes);
+        if (sniffed is not null)
+        {
+            return Responses.InlineBytes(bytes, sniffed);
+        }
+
+        return Responses.Attachment(bytes);
+    }
+
+    private static Dictionary<long, string> AttachmentNames(Microsoft.Data.Sqlite.SqliteConnection connection, IReadOnlyList<MessageRow> messages)
+    {
+        return Attachments.Filenames(
+            connection,
+            Attachments.MessageType,
+            Attachments.AttachmentName,
+            messages.Select(message => message.Id).ToArray());
     }
 
     private static IResult Edit(long roomId, long id, HttpContext context, CampfireDatabase database)
@@ -183,7 +244,7 @@ public static class MessageEndpoints
             return scoped.Denied;
         }
 
-        MessageStore.Destroy(scoped.Connection!, scoped.Message!.Value);
+        MessageStore.Destroy(scoped.Connection!, scoped.Message!.Value, Attachments.FilesRoot(database.Path));
         return Responses.Html(Frame("Message", "<p>Deleted</p>"));
     }
 

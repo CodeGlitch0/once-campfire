@@ -83,4 +83,35 @@ public static class PostedForm
         var filename = string.IsNullOrWhiteSpace(file.FileName) ? "blob" : Path.GetFileName(file.FileName);
         return new BlobPayload(filename, sniffed, bytes);
     }
+
+    /// <summary>
+    /// Any uploaded file. Content type is sniffed from the bytes, never the client header.
+    /// Non-images are stored as <c>application/octet-stream</c> so HTML and SVG are not recorded as those types.
+    /// </summary>
+    public static async Task<BlobPayload?> AnyFile(IFormCollection? form, string fieldName)
+    {
+        if (form is null)
+        {
+            return null;
+        }
+
+        var file = form.Files.GetFile(fieldName);
+        if (file is null || file.Length <= 0)
+        {
+            return null;
+        }
+
+        using var stream = file.OpenReadStream();
+        using var memory = new MemoryStream();
+        await stream.CopyToAsync(memory);
+        var bytes = memory.ToArray();
+        var filename = string.IsNullOrWhiteSpace(file.FileName) ? "blob" : Path.GetFileName(file.FileName);
+        if (string.IsNullOrWhiteSpace(filename) || filename is "." or "..")
+        {
+            filename = "blob";
+        }
+
+        var sniffed = ImageSniff.Detect(bytes);
+        return new BlobPayload(filename, sniffed ?? "application/octet-stream", bytes);
+    }
 }

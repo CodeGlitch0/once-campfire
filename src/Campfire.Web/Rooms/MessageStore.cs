@@ -104,11 +104,27 @@ public static partial class MessageStore
         long creatorId,
         string? body,
         string? clientMessageId,
-        string? createdAt = null)
+        string? createdAt = null,
+        BlobPayload? attachment = null,
+        string? filesRoot = null)
     {
         var timestamp = createdAt ?? FirstRun.Timestamp();
         var clientId = clientMessageId ?? Guid.NewGuid().ToString("D");
         var stored = body ?? "";
+        var plain = PlainText(stored);
+        if (plain.Length == 0 && attachment is not null)
+        {
+            plain = string.IsNullOrEmpty(attachment.Value.Filename) ? "blob" : attachment.Value.Filename;
+        }
+
+        string? stagedKey = null;
+        string? stagedPath = null;
+        if (attachment is not null && !string.IsNullOrEmpty(filesRoot))
+        {
+            stagedKey = Attachments.NewKey();
+            stagedPath = Attachments.Stage(filesRoot, stagedKey, attachment.Value.Bytes);
+        }
+
         using var transaction = connection.BeginTransaction();
         try
         {
@@ -130,7 +146,20 @@ public static partial class MessageStore
             }
 
             InsertRichText(connection, transaction, id, stored, timestamp);
-            ReplaceSearchIndex(connection, transaction, id, PlainText(stored));
+            ReplaceSearchIndex(connection, transaction, id, plain);
+            if (attachment is not null && stagedKey is not null)
+            {
+                Attachments.Insert(
+                    connection,
+                    transaction,
+                    Attachments.MessageType,
+                    id,
+                    Attachments.AttachmentName,
+                    stagedKey,
+                    attachment.Value,
+                    timestamp);
+            }
+
             TouchRoom(connection, transaction, roomId, timestamp);
             MembershipStore.MarkUnreadExcept(
                 connection,
@@ -144,6 +173,7 @@ public static partial class MessageStore
         catch
         {
             Rollback(transaction);
+            Attachments.DeleteFile(stagedPath);
             throw;
         }
     }
@@ -209,9 +239,10 @@ public static partial class MessageStore
         }
     }
 
-    public static void Destroy(SqliteConnection connection, MessageRow message)
+    public static void Destroy(SqliteConnection connection, MessageRow message, string? filesRoot = null)
     {
         var timestamp = FirstRun.Timestamp();
+        List<string> files = [];
         using var transaction = connection.BeginTransaction();
         try
         {
@@ -225,14 +256,28 @@ public static partial class MessageStore
                 WHERE record_type = 'Message' AND record_id = $id
                 """,
                 message.Id);
-            Execute(
-                connection,
-                transaction,
-                """
-                DELETE FROM active_storage_attachments
-                WHERE record_type = 'Message' AND record_id = $id
-                """,
-                message.Id);
+            if (string.IsNullOrEmpty(filesRoot))
+            {
+                Execute(
+                    connection,
+                    transaction,
+                    """
+                    DELETE FROM active_storage_attachments
+                    WHERE record_type = 'Message' AND record_id = $id
+                    """,
+                    message.Id);
+            }
+            else
+            {
+                files = Attachments.Detach(
+                    connection,
+                    transaction,
+                    filesRoot,
+                    Attachments.MessageType,
+                    message.Id,
+                    Attachments.AttachmentName);
+            }
+
             Execute(connection, transaction, "DELETE FROM messages WHERE id = $id", message.Id);
             TouchRoom(connection, transaction, message.RoomId, timestamp);
             transaction.Commit();
@@ -241,6 +286,11 @@ public static partial class MessageStore
         {
             Rollback(transaction);
             throw;
+        }
+
+        foreach (var file in files)
+        {
+            Attachments.DeleteFile(file);
         }
     }
 

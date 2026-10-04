@@ -16,8 +16,10 @@ public static class Attachments
 {
     public const string UserType = "User";
     public const string AccountType = "Account";
+    public const string MessageType = "Message";
     public const string AvatarName = "avatar";
     public const string LogoName = "logo";
+    public const string AttachmentName = "attachment";
     public const string ServiceName = "local";
 
     public static string FilesRoot(string databasePath)
@@ -200,6 +202,63 @@ public static class Attachments
         command.Parameters.AddWithValue("$id", recordId);
         command.Parameters.AddWithValue("$name", name);
         return command.ExecuteScalar() is not null;
+    }
+
+    /// <summary>
+    /// Removes attachment and blob rows inside an existing transaction. Caller deletes the files after commit.
+    /// </summary>
+    public static List<string> Detach(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        string filesRoot,
+        string recordType,
+        long recordId,
+        string name)
+    {
+        return PurgeRows(connection, transaction, filesRoot, recordType, recordId, name);
+    }
+
+    public static Dictionary<long, string> Filenames(
+        SqliteConnection connection,
+        string recordType,
+        string name,
+        IReadOnlyCollection<long> recordIds)
+    {
+        var filenames = new Dictionary<long, string>();
+        if (recordIds.Count == 0)
+        {
+            return filenames;
+        }
+
+        using var command = connection.CreateCommand();
+        var placeholders = new string[recordIds.Count];
+        var index = 0;
+        foreach (var id in recordIds)
+        {
+            var parameter = "$id" + index.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            placeholders[index] = parameter;
+            command.Parameters.AddWithValue(parameter, id);
+            index++;
+        }
+
+        command.CommandText = $"""
+            SELECT attachments.record_id, blobs.filename
+            FROM active_storage_attachments attachments
+            JOIN active_storage_blobs blobs ON blobs.id = attachments.blob_id
+            WHERE attachments.record_type = $type
+              AND attachments.name = $name
+              AND attachments.record_id IN ({string.Join(", ", placeholders)})
+            ORDER BY attachments.id
+            """;
+        command.Parameters.AddWithValue("$type", recordType);
+        command.Parameters.AddWithValue("$name", name);
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            filenames[reader.GetInt64(0)] = reader.IsDBNull(1) ? "blob" : reader.GetString(1);
+        }
+
+        return filenames;
     }
 
     public static void Destroy(

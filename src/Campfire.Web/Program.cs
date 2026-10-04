@@ -29,6 +29,7 @@ UserEndpoints.Map(app);
 AccountEndpoints.Map(app);
 RoomEndpoints.Map(app);
 MessageEndpoints.Map(app);
+BoostEndpoints.Map(app);
 
 app.Run();
 

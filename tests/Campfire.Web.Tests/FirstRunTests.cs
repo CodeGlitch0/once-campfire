@@ -61,7 +61,9 @@ public sealed class FirstRunTests
         Assert.Equal(1L, Count(connection, "sessions"));
         var token = (string)Scalar(connection, "SELECT token FROM sessions")!;
         Assert.Equal(24, token.Length);
-        Assert.Contains($"session_token={token}", cookie, StringComparison.Ordinal);
+        var signed = SessionCookie.ValueFromSetCookieHeader(cookie);
+        Assert.False(string.IsNullOrEmpty(signed));
+        Assert.Equal(token, RailsMessages.ReadSessionToken(signed, SecretKey.Default));
     }
 
     [Fact]

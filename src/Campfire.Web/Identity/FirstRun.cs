@@ -1,5 +1,4 @@
 using System.Globalization;
-using System.Security.Cryptography;
 using Microsoft.Data.Sqlite;
 
 namespace Campfire.Web.Identity;
@@ -137,7 +136,7 @@ public static class FirstRun
         FirstRunRequest request,
         string timestamp)
     {
-        var token = GenerateSessionToken();
+        var token = SessionToken.Generate();
         using var command = connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = """
@@ -153,18 +152,6 @@ public static class FirstRun
         command.Parameters.AddWithValue("$user", userId);
         command.ExecuteNonQuery();
         return token;
-    }
-
-    private static string GenerateSessionToken()
-    {
-        const string alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
-        Span<char> token = stackalloc char[24];
-        for (var i = 0; i < token.Length; i++)
-        {
-            token[i] = alphabet[RandomNumberGenerator.GetInt32(alphabet.Length)];
-        }
-
-        return new string(token);
     }
 
     private static void RollbackQuietly(SqliteTransaction transaction)

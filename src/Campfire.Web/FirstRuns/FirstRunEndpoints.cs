@@ -76,16 +76,8 @@ public static class FirstRunEndpoints
 
         if (outcome.Created && outcome.SessionToken is not null)
         {
-            // Rails sets cookies.signed.permanent[:session_token]. Signing uses secret_key_base and is not this task.
-            // The sessions row is the first-run requirement; the cookie carries that token (httponly, lax, 20 years).
-            context.Response.Cookies.Append("session_token", outcome.SessionToken, new CookieOptions
-            {
-                HttpOnly = true,
-                SameSite = SameSiteMode.Lax,
-                Expires = DateTimeOffset.UtcNow.AddYears(20),
-                Path = "/",
-                IsEssential = true,
-            });
+            var secret = SecretKey.Resolve(context.RequestServices.GetRequiredService<IConfiguration>());
+            SessionCookie.Write(context.Response, outcome.SessionToken, secret);
         }
 
         return RedirectToRoot(context);

@@ -113,7 +113,7 @@ Optional `(.:format)` applies to ordinary routes unless noted.
 | 101 | GET | `/rooms/:room_id/involvement` | `rooms/involvements#show` | `room_involvement` |
 | 102 | PATCH | `/rooms/:room_id/involvement` | `rooms/involvements#update` | `room_involvement` |
 | 103 | PUT | `/rooms/:room_id/involvement` | `rooms/involvements#update` | `room_involvement` |
-| 104 | GET | `/rooms/:id/@:message_id` | `rooms#show` | `room_at_message` |
+| 104 | GET | `/rooms/:room_id/@:message_id` | `rooms#show` | `room_at_message` |
 | 105 | GET | `/rooms/opens` | `rooms/opens#index` | `rooms_opens` |
 | 106 | POST | `/rooms/opens` | `rooms/opens#create` | `rooms_opens` |
 | 107 | GET | `/rooms/opens/new` | `rooms/opens#new` | `new_rooms_open` |
@@ -167,7 +167,7 @@ Optional `(.:format)` applies to ordinary routes unless noted.
 - Singular `resource` routes (no `:id`): `first_run`, `session`, `account`, and the nested singular resources under them (`key`, `join_code`, `logo`, `custom_styles`, `avatar`, `ban`, `sidebar`, `profile`, `unfurl_link`). Plural `resources` keep an `:id` (or parent `:_id`) segment. `resources :qr_code` is plural routing with a singular name: path `/qr_code/:id`, controller `qr_code` (not pluralized), helper `qr_code`.
 - Routes 58–74: `scope defaults: { user_id: "me" }`. Path still has `:user_id`. URL helpers may omit it and send `me`.
 - Routes 92–98: inside `resources :rooms`, `nested` (parent member scope `/rooms/:room_id`), then `scope path: ":bot_key", as: :bot, defaults: { format: :json }`. Controllers are explicit: `messages/by_bots` (index, create, update, destroy only) and `messages/boosts/by_bots` (create, destroy only). Generated URLs use format json. Optional `(.:format)` still applies; the default format is json.
-- Route 104: member `get "@:message_id", to: "rooms#show", as: :at_message`. `@` is a literal path segment. Helper `room_at_message`.
+- Route 104: not a member `:id` route. Bare `get "@:message_id", to: "rooms#show", as: :at_message` inside `resources :rooms` (no `on: :member`) is nested parent scope, param `:room_id`. `@` is a literal path segment. Helper `room_at_message`.
 - Routes 149–150: no explicit `as:`; names are the path defaults (`service-worker` → `service_worker`). `webmanifest_path` is used by the Rails layout.
 - `namespace :rooms` (`opens`, `closeds`, `directs`) is declared after `resources :rooms`. Both sets are listed; this file does not reorder them.
 - No Action Cable mount in `config/routes.rb`.

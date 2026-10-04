@@ -108,7 +108,13 @@ public static class SessionEndpoints
             <!DOCTYPE html>
             <html>
             <head><title>Session transfer</title></head>
-            <body><p>Session transfer</p><form method="post" action="/session/transfers/{Encode(id)}"></form></body>
+            <body>
+            <p>Session transfer</p>
+            <form method="post" action="/session/transfers/{Encode(id)}">
+              <input type="hidden" name="_method" value="put" autocomplete="off">
+              <button type="submit" name="commit" value="Sign in">Sign in</button>
+            </form>
+            </body>
             </html>
             """);
     }

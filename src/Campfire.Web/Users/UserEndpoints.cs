@@ -108,7 +108,11 @@ public static class UserEndpoints
         var viewerId = SignedIn.UserId(context)!.Value;
         var viewer = UserStore.Find(connection, viewerId);
         var admin = viewer is not null && viewer.Value.Role == UserStore.AdministratorRole;
-        return Responses.Html(RenderUser(user.Value, admin, viewerId == user.Value.Id));
+        var self = viewerId == user.Value.Id;
+        var transfer = ShowTransferLink(user.Value, admin)
+            ? RenderTransfer(context, user.Value, self)
+            : "";
+        return Responses.Html(RenderUser(user.Value, admin, self, transfer));
     }
 
     private static IResult ShowProfile(HttpContext context, CampfireDatabase database)
@@ -128,7 +132,7 @@ public static class UserEndpoints
 
         var secret = Secret(context);
         var token = RailsMessages.SignRecordId(user.Value.Id, RailsMessages.AvatarPurpose, secret);
-        return Responses.Html(RenderProfile(user.Value, token));
+        return Responses.Html(RenderProfile(user.Value, token, RenderTransfer(context, user.Value, self: true)));
     }
 
     private static async Task<IResult> UpdateProfile(HttpContext context, CampfireDatabase database)
@@ -365,7 +369,35 @@ public static class UserEndpoints
             """;
     }
 
-    private static string RenderUser(UserRow user, bool admin, bool self)
+    /// <summary>
+    /// Rails <c>users/show</c> renders the transfer partial only for an administrator
+    /// viewing an active, non-bot user. Profile always renders it for <c>Current.user</c>.
+    /// </summary>
+    private static bool ShowTransferLink(UserRow user, bool admin)
+    {
+        return admin
+            && user.Role != UserStore.BotRole
+            && user.Status == UserStore.ActiveStatus;
+    }
+
+    private static string RenderTransfer(HttpContext context, UserRow user, bool self)
+    {
+        var transferId = RailsMessages.SignTransferId(
+            user.Id,
+            Secret(context),
+            DateTimeOffset.UtcNow.Add(RailsMessages.TransferLifetime));
+        var url = $"{context.Request.Scheme}://{context.Request.Host}/session/transfers/{transferId}";
+        var label = self
+            ? "Use this link to login automatically on another device"
+            : "Share to get them back into their account";
+        var labelClass = self ? " class=\"for-screen-reader\"" : "";
+        return $"""
+            <label for="session_transfer_url"{labelClass}>{label}</label>
+            <input type="text" class="input" value="{Responses.Encode(url)}" id="session_transfer_url" readonly>
+            """;
+    }
+
+    private static string RenderUser(UserRow user, bool admin, bool self, string transfer)
     {
         var email = admin && user.EmailAddress is not null
             ? $"<div><a href=\"mailto:{Responses.Encode(user.EmailAddress)}\">{Responses.Encode(user.EmailAddress)}</a></div>"
@@ -395,6 +427,7 @@ public static class UserEndpoints
             {edit}
             <section class="{(user.Status == UserStore.BannedStatus ? "banned" : "")}">
             {body}
+            {transfer}
             {ban}
             </section>
             </body>
@@ -402,7 +435,7 @@ public static class UserEndpoints
             """;
     }
 
-    private static string RenderProfile(UserRow user, string avatarToken)
+    private static string RenderProfile(UserRow user, string avatarToken, string transfer)
     {
         return $"""
             <!DOCTYPE html>
@@ -421,6 +454,7 @@ public static class UserEndpoints
               <label>Avatar <input type="file" name="user[avatar]" accept="image/*"></label>
               <button type="submit">Save</button>
             </form>
+            {transfer}
             </body>
             </html>
             """;

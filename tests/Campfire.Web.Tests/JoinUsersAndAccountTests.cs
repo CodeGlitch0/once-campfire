@@ -666,6 +666,105 @@ public sealed class JoinUsersAndAccountTests
         Assert.Equal("inline", logo.Content.Headers.ContentDisposition?.DispositionType);
     }
 
+    [Fact]
+    public async Task Profile_TransferLink_SignsThatUserIn_AndUserShowMatchesRailsVisibility()
+    {
+        await using var host = new Host();
+        using var client = host.CreateClient();
+        var adminCookie = await FirstRun(client, "Admin", "admin@example.com");
+        var memberCookie = await Join(client, await JoinCode(host), "Member", "member@example.com");
+        long memberId;
+        long adminId;
+        using (var connection = host.Open())
+        {
+            memberId = (long)Scalar(connection, "SELECT id FROM users WHERE email_address = 'member@example.com'")!;
+            adminId = (long)Scalar(connection, "SELECT id FROM users WHERE email_address = 'admin@example.com'")!;
+        }
+
+        string transferPath;
+        using (var profile = await Send(client, HttpMethod.Get, "/users/me/profile", memberCookie))
+        {
+            Assert.Equal(HttpStatusCode.OK, profile.StatusCode);
+            var html = await profile.Content.ReadAsStringAsync();
+            Assert.Contains("for=\"session_transfer_url\"", html, StringComparison.Ordinal);
+            Assert.Contains("id=\"session_transfer_url\"", html, StringComparison.Ordinal);
+            Assert.Contains("Use this link to login automatically on another device", html, StringComparison.Ordinal);
+            transferPath = TransferPath(html);
+            var signed = transferPath["/session/transfers/".Length..];
+            Assert.Equal(memberId, RailsMessages.ReadTransferId(signed, SecretKey.Default));
+        }
+
+        string formHtml;
+        using (var show = await client.GetAsync(transferPath))
+        {
+            Assert.Equal(HttpStatusCode.OK, show.StatusCode);
+            formHtml = await show.Content.ReadAsStringAsync();
+        }
+
+        Assert.Contains("method=\"post\"", formHtml, StringComparison.Ordinal);
+        Assert.Contains("name=\"_method\" value=\"put\"", formHtml, StringComparison.Ordinal);
+        Assert.Contains("type=\"submit\" name=\"commit\"", formHtml, StringComparison.Ordinal);
+
+        using var signedIn = await client.PostAsync(transferPath, Form(("_method", "put"), ("commit", "Sign in")));
+        Assert.Equal(HttpStatusCode.Redirect, signedIn.StatusCode);
+        Assert.Equal("/", signedIn.Headers.Location?.AbsolutePath);
+        var cookie = Cookie(signedIn);
+        var token = RailsMessages.ReadSessionToken(cookie, SecretKey.Default);
+        Assert.False(string.IsNullOrEmpty(token));
+        using (var connection = host.Open())
+        {
+            Assert.Equal(memberId, Scalar(connection, "SELECT user_id FROM sessions WHERE token = $token", ("$token", token!)));
+        }
+
+        using (var memberShow = await Send(client, HttpMethod.Get, "/users/" + memberId, memberCookie))
+        {
+            Assert.DoesNotContain("/session/transfers/", await memberShow.Content.ReadAsStringAsync(), StringComparison.Ordinal);
+        }
+
+        using (var memberViewsAdmin = await Send(client, HttpMethod.Get, "/users/" + adminId, memberCookie))
+        {
+            Assert.DoesNotContain("/session/transfers/", await memberViewsAdmin.Content.ReadAsStringAsync(), StringComparison.Ordinal);
+        }
+
+        using (var adminOwn = await Send(client, HttpMethod.Get, "/users/" + adminId, adminCookie))
+        {
+            var html = await adminOwn.Content.ReadAsStringAsync();
+            Assert.Contains("/session/transfers/", html, StringComparison.Ordinal);
+            Assert.Contains("Use this link to login automatically on another device", html, StringComparison.Ordinal);
+            Assert.DoesNotContain("Share to get them back into their account", html, StringComparison.Ordinal);
+            Assert.Equal(adminId, RailsMessages.ReadTransferId(TransferPath(html)["/session/transfers/".Length..], SecretKey.Default));
+        }
+
+        using (var adminShow = await Send(client, HttpMethod.Get, "/users/" + memberId, adminCookie))
+        {
+            var html = await adminShow.Content.ReadAsStringAsync();
+            Assert.Contains("for=\"session_transfer_url\"", html, StringComparison.Ordinal);
+            Assert.Contains("Share to get them back into their account", html, StringComparison.Ordinal);
+            Assert.Equal(memberId, RailsMessages.ReadTransferId(TransferPath(html)["/session/transfers/".Length..], SecretKey.Default));
+        }
+
+        using var banned = await Send(client, HttpMethod.Post, "/users/" + memberId + "/ban", adminCookie);
+        Assert.Equal(HttpStatusCode.Redirect, banned.StatusCode);
+        using (var bannedShow = await Send(client, HttpMethod.Get, "/users/" + memberId, adminCookie))
+        {
+            Assert.DoesNotContain("/session/transfers/", await bannedShow.Content.ReadAsStringAsync(), StringComparison.Ordinal);
+        }
+    }
+
+    private static string TransferPath(string html)
+    {
+        const string marker = "/session/transfers/";
+        var start = html.IndexOf(marker, StringComparison.Ordinal);
+        Assert.True(start >= 0, html);
+        var end = start + marker.Length;
+        while (end < html.Length && html[end] is not '"' and not '<' and not ' ' and not '&')
+        {
+            end++;
+        }
+
+        return html[start..end];
+    }
+
     private static async Task<string> FirstRun(HttpClient client, string name = "Admin", string email = "admin@example.com")
     {
         using var response = await client.PostAsync("/first_run", Form(

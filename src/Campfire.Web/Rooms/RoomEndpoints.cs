@@ -92,8 +92,7 @@ public static class RoomEndpoints
 
     private static IResult ShowAt(long roomId, long messageId, HttpContext context, CampfireDatabase database)
     {
-        _ = messageId;
-        return RenderShow(context, database, roomId, RoomScope.Member);
+        return RenderShow(context, database, roomId, RoomScope.Member, messageId);
     }
 
     private static IResult ShowOpen(long id, HttpContext context, CampfireDatabase database)
@@ -444,7 +443,12 @@ public static class RoomEndpoints
         return Responses.Redirect(context, "/");
     }
 
-    private static IResult RenderShow(HttpContext context, CampfireDatabase database, long id, RoomScope scope)
+    private static IResult RenderShow(
+        HttpContext context,
+        CampfireDatabase database,
+        long id,
+        RoomScope scope,
+        long? messageId = null)
     {
         var denied = RequireUser(context);
         if (denied is not null)
@@ -463,7 +467,8 @@ public static class RoomEndpoints
         Remember(context, room.Value.Id);
         var viewer = Users.Find(connection, userId);
         var title = RoomStore.DisplayName(connection, room.Value, userId, viewer?.Name);
-        return Responses.Html(RenderRoom(room.Value, title));
+        var messages = MessageStore.ShowPage(connection, room.Value.Id, messageId);
+        return Responses.Html(RenderRoom(room.Value, title, messages));
     }
 
     private static IResult RedirectToRoom(HttpContext context, CampfireDatabase database, long id, RoomScope scope)
@@ -612,7 +617,7 @@ public static class RoomEndpoints
         return "/rooms/" + roomId.ToString(CultureInfo.InvariantCulture);
     }
 
-    private static string RenderRoom(RoomRow room, string title)
+    private static string RenderRoom(RoomRow room, string title, IReadOnlyList<MessageRow> messages)
     {
         var id = room.Id.ToString(CultureInfo.InvariantCulture);
         return $"""
@@ -625,6 +630,8 @@ public static class RoomEndpoints
             <body>
             <h1>{Responses.Encode(title)}</h1>
             <p class="room-type">{Responses.Encode(room.Type)}</p>
+            {MessageEndpoints.RenderMessages(room.Id, messages)}
+            {MessageEndpoints.RenderComposer(room.Id)}
             </body>
             </html>
             """;

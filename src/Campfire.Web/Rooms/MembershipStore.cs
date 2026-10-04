@@ -287,10 +287,12 @@ public static class MembershipStore
         long roomId,
         long exceptUserId,
         string unreadAt,
-        DateTime? utcNow = null)
+        DateTime? utcNow = null,
+        SqliteTransaction? transaction = null)
     {
         var now = utcNow ?? DateTime.UtcNow;
         using var command = connection.CreateCommand();
+        command.Transaction = transaction;
         command.CommandText = """
             UPDATE memberships
             SET unread_at = $unread, updated_at = $updated

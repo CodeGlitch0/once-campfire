@@ -4,8 +4,8 @@ namespace Campfire.Web.Identity;
 
 /// <summary>
 /// Writes and reads the Rails <c>session_token</c> cookie:
-/// signed, httponly, samesite=lax, path=/, expires in 20 years. Not marked Secure
-/// (<c>config.force_ssl</c> is off).
+/// signed, httponly, samesite=lax, path=/, expires in 20 years. Secure when the
+/// connection is HTTPS or Rails <c>assume_ssl</c> is on. <c>X-Forwarded-Proto</c> is not consulted.
 /// </summary>
 public static class SessionCookie
 {
@@ -16,18 +16,18 @@ public static class SessionCookie
         return (now ?? DateTimeOffset.UtcNow).AddYears(20);
     }
 
-    public static void Write(HttpResponse response, string token, string secret, DateTimeOffset? expiresAt = null)
+    public static void Write(HttpResponse response, string token, string secret, bool secure, DateTimeOffset? expiresAt = null)
     {
         var expires = expiresAt ?? PermanentExpiry();
         var signed = RailsMessages.SignSessionToken(token, secret, expires);
-        response.Headers.Append("Set-Cookie", Format(signed, expires));
+        response.Headers.Append("Set-Cookie", Format(signed, expires, secure));
     }
 
-    public static void Clear(HttpResponse response)
+    public static void Clear(HttpResponse response, bool secure)
     {
         response.Headers.Append(
             "Set-Cookie",
-            "session_token=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT; httponly; samesite=lax");
+            "session_token=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT; httponly; samesite=lax" + SecureFlag(secure));
     }
 
     public static string? FromRequest(HttpRequest request)
@@ -103,9 +103,14 @@ public static class SessionCookie
         return null;
     }
 
-    private static string Format(string value, DateTimeOffset expires)
+    private static string Format(string value, DateTimeOffset expires, bool secure)
     {
         var httpDate = expires.UtcDateTime.ToString("R", CultureInfo.InvariantCulture);
-        return $"session_token={value}; path=/; expires={httpDate}; httponly; samesite=lax";
+        return $"session_token={value}; path=/; expires={httpDate}; httponly; samesite=lax{SecureFlag(secure)}";
+    }
+
+    private static string SecureFlag(bool secure)
+    {
+        return secure ? "; secure" : "";
     }
 }

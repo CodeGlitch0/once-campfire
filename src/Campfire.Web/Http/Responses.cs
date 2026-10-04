@@ -21,7 +21,12 @@ public static class Responses
 
     public static IResult InlineBytes(byte[] bytes, string contentType)
     {
-        return new InlineFile(bytes, contentType);
+        return new ByteBody(bytes, contentType, inline: true);
+    }
+
+    public static IResult Attachment(byte[] bytes, string contentType = "application/octet-stream")
+    {
+        return new ByteBody(bytes, contentType, inline: false);
     }
 
     public static string Encode(string? value)
@@ -29,13 +34,13 @@ public static class Responses
         return WebUtility.HtmlEncode(value ?? "");
     }
 
-    private sealed class InlineFile(byte[] bytes, string contentType) : IResult
+    private sealed class ByteBody(byte[] bytes, string contentType, bool inline) : IResult
     {
         public async Task ExecuteAsync(HttpContext httpContext)
         {
             httpContext.Response.StatusCode = StatusCodes.Status200OK;
             httpContext.Response.ContentType = contentType;
-            httpContext.Response.Headers.ContentDisposition = "inline";
+            httpContext.Response.Headers.ContentDisposition = inline ? "inline" : "attachment";
             httpContext.Response.Headers["X-Content-Type-Options"] = "nosniff";
             await httpContext.Response.Body.WriteAsync(bytes);
         }

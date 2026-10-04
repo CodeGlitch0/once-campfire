@@ -42,3 +42,9 @@ Thumbs.db
 # Node (not used yet; keep artifacts out if tooling appears)
 node_modules/
 dist/
+
+# Local data and secrets
+storage/
+*.sqlite3
+*.db
+.env

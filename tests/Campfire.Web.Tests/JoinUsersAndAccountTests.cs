@@ -533,6 +533,139 @@ public sealed class JoinUsersAndAccountTests
         Assert.DoesNotContain("mailto:", await hidden.Content.ReadAsStringAsync(), StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task PostBan_WithMethodDelete_Unbans()
+    {
+        await using var host = new Host();
+        using var client = host.CreateClient();
+        var adminCookie = await FirstRun(client);
+        await Join(client, await JoinCode(host), "Member", "member@example.com", "203.0.113.9");
+        long memberId;
+        using (var connection = host.Open())
+        {
+            memberId = (long)Scalar(connection, "SELECT id FROM users WHERE email_address = 'member@example.com'")!;
+        }
+
+        using var banned = await Send(client, HttpMethod.Post, "/users/" + memberId + "/ban", adminCookie);
+        Assert.Equal(HttpStatusCode.Redirect, banned.StatusCode);
+
+        using var unbanned = await Send(
+            client,
+            HttpMethod.Post,
+            "/users/" + memberId + "/ban",
+            adminCookie,
+            Form(("_method", "delete")));
+        Assert.Equal(HttpStatusCode.Redirect, unbanned.StatusCode);
+        Assert.Equal("/users/" + memberId, unbanned.Headers.Location?.AbsolutePath);
+
+        using var connectionAfter = host.Open();
+        Assert.Equal(0L, Scalar(connectionAfter, "SELECT status FROM users WHERE id = $id", ("$id", memberId)));
+        Assert.Equal(0L, Count(connectionAfter, "bans"));
+    }
+
+    [Fact]
+    public async Task RoleCheckboxPair_InOnePost_StoresAdministrator()
+    {
+        await using var host = new Host();
+        using var client = host.CreateClient();
+        var adminCookie = await FirstRun(client);
+        await Join(client, await JoinCode(host), "Member", "member@example.com");
+        long memberId;
+        using (var connection = host.Open())
+        {
+            memberId = (long)Scalar(connection, "SELECT id FROM users WHERE email_address = 'member@example.com'")!;
+        }
+
+        using var promoted = await Send(
+            client,
+            HttpMethod.Post,
+            "/account/users/" + memberId,
+            adminCookie,
+            Form(
+                ("_method", "patch"),
+                ("user[role]", "member"),
+                ("user[role]", "administrator")));
+        Assert.Equal(HttpStatusCode.Redirect, promoted.StatusCode);
+        Assert.Equal("/account/edit", promoted.Headers.Location?.AbsolutePath);
+
+        using var connectionAfter = host.Open();
+        Assert.Equal(1L, Scalar(connectionAfter, "SELECT role FROM users WHERE id = $id", ("$id", memberId)));
+
+        using var edit = await Send(client, HttpMethod.Get, "/account/edit", adminCookie);
+        var html = await edit.Content.ReadAsStringAsync();
+        Assert.Contains("aria-label=\"Account name\"", html, StringComparison.Ordinal);
+        Assert.Contains("aria-label=\"Upload logo\"", html, StringComparison.Ordinal);
+        Assert.Contains("id=\"invite_url\"", html, StringComparison.Ordinal);
+        Assert.Contains("aria-labelledby=\"invite_label\"", html, StringComparison.Ordinal);
+        Assert.Contains("aria-label=\"Role\"", html, StringComparison.Ordinal);
+        Assert.Contains("name=\"commit\"", html, StringComparison.Ordinal);
+        Assert.Contains(">Save role</button>", html, StringComparison.Ordinal);
+
+        using var styles = await Send(client, HttpMethod.Get, "/account/custom_styles/edit", adminCookie);
+        Assert.Contains("aria-label=\"Custom CSS\"", await styles.Content.ReadAsStringAsync(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task StoredHtmlAndSvg_AreNotServedInlineAsThoseTypes()
+    {
+        await using var host = new Host();
+        using var client = host.CreateClient();
+        var adminCookie = await FirstRun(client);
+        long adminId;
+        using (var connection = host.Open())
+        {
+            adminId = (long)Scalar(connection, "SELECT id FROM users")!;
+            Attachments.Replace(
+                connection,
+                Attachments.FilesRoot(host.DatabasePath),
+                Attachments.UserType,
+                adminId,
+                Attachments.AvatarName,
+                new BlobPayload("evil.html", "text/html", "<html><script>alert(1)</script></html>"u8.ToArray()));
+        }
+
+        var token = RailsMessages.SignRecordId(adminId, RailsMessages.AvatarPurpose, SecretKey.Default);
+        using (var shown = await Send(client, HttpMethod.Get, "/users/" + token + "/avatar", adminCookie))
+        {
+            Assert.Equal(HttpStatusCode.OK, shown.StatusCode);
+            Assert.NotEqual("text/html", shown.Content.Headers.ContentType?.MediaType);
+            var body = await shown.Content.ReadAsStringAsync();
+            Assert.DoesNotContain("<script>", body, StringComparison.Ordinal);
+            Assert.DoesNotContain("alert(1)", body, StringComparison.Ordinal);
+        }
+
+        using (var connection = host.Open())
+        {
+            Attachments.Replace(
+                connection,
+                Attachments.FilesRoot(host.DatabasePath),
+                Attachments.UserType,
+                adminId,
+                Attachments.AvatarName,
+                new BlobPayload("evil.svg", "image/svg+xml", "<svg xmlns=\"http://www.w3.org/2000/svg\"><script>stored-svg</script></svg>"u8.ToArray()));
+            var accountId = (long)Scalar(connection, "SELECT id FROM accounts")!;
+            Attachments.Replace(
+                connection,
+                Attachments.FilesRoot(host.DatabasePath),
+                Attachments.AccountType,
+                accountId,
+                Attachments.LogoName,
+                new BlobPayload("logo.html", "text/html", "<html>stored-logo</html>"u8.ToArray()));
+        }
+
+        using (var svg = await Send(client, HttpMethod.Get, "/users/" + token + "/avatar", adminCookie))
+        {
+            var body = await svg.Content.ReadAsStringAsync();
+            Assert.DoesNotContain("stored-svg", body, StringComparison.Ordinal);
+            Assert.NotEqual("text/html", svg.Content.Headers.ContentType?.MediaType);
+        }
+
+        using var logo = await client.GetAsync("/account/logo");
+        Assert.Equal("image/png", logo.Content.Headers.ContentType?.MediaType);
+        Assert.DoesNotContain("stored-logo", await logo.Content.ReadAsStringAsync(), StringComparison.Ordinal);
+        Assert.Equal("inline", logo.Content.Headers.ContentDisposition?.DispositionType);
+    }
+
     private static async Task<string> FirstRun(HttpClient client, string name = "Admin", string email = "admin@example.com")
     {
         using var response = await client.PostAsync("/first_run", Form(
@@ -647,6 +780,8 @@ public sealed class JoinUsersAndAccountTests
                 builder.UseSetting("Campfire:DatabasePath", _path);
             });
         }
+
+        public string DatabasePath => _path;
 
         public HttpClient CreateClient()
         {

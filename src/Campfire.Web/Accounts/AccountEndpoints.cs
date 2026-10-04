@@ -205,7 +205,11 @@ public static class AccountEndpoints
                 Attachments.LogoName);
             if (stored is not null)
             {
-                return Responses.InlineBytes(stored.Value.Bytes, stored.Value.ContentType);
+                var image = ImageResponses.Logo(stored.Value.Bytes);
+                if (image is not null)
+                {
+                    return image;
+                }
             }
         }
 
@@ -260,7 +264,7 @@ public static class AccountEndpoints
             <p>Add custom CSS styles. Use Caution: you could break things.</p>
             <form action="/account/custom_styles" method="post">
               <input type="hidden" name="_method" value="patch">
-              <textarea name="account[custom_styles]" rows="16">{Responses.Encode(account.Value.CustomStyles)}</textarea>
+              <textarea name="account[custom_styles]" aria-label="Custom CSS" rows="16">{Responses.Encode(account.Value.CustomStyles)}</textarea>
               <button type="submit">Save changes</button>
             </form>
             </body>
@@ -336,8 +340,8 @@ public static class AccountEndpoints
             ? $"""
                 <form action="/account" method="post">
                   <input type="hidden" name="_method" value="patch">
-                  <input name="account[name]" value="{Responses.Encode(account.Name)}">
-                  <input type="file" name="account[logo]" accept="image/*">
+                  <input name="account[name]" aria-label="Account name" value="{Responses.Encode(account.Name)}">
+                  <input type="file" name="account[logo]" accept="image/*" aria-label="Upload logo">
                   <button type="submit">Save changes</button>
                 </form>
                 """
@@ -349,8 +353,8 @@ public static class AccountEndpoints
             <body>
             {(admin ? "<a href=\"/account/custom_styles/edit\">Custom styles</a>" : "")}
             {nameField}
-            <p>Share to invite more people</p>
-            <input id="invite_url" readonly value="/join/{Responses.Encode(account.JoinCode)}">
+            <p id="invite_label">Share to invite more people</p>
+            <input id="invite_url" readonly aria-labelledby="invite_label" value="/join/{Responses.Encode(account.JoinCode)}">
             {regenerate}
             <turbo-frame id="account_users">
               {adminItems}
@@ -373,7 +377,8 @@ public static class AccountEndpoints
                 <form action="/account/users/{id}" method="post">
                   <input type="hidden" name="_method" value="patch">
                   <input type="hidden" name="user[role]" value="member">
-                  <input type="checkbox" name="user[role]" value="administrator"{checkedAdmin}>
+                  <input type="checkbox" name="user[role]" value="administrator" aria-label="Role"{checkedAdmin}>
+                  <button type="submit" name="commit">Save role</button>
                 </form>
                 """;
         }

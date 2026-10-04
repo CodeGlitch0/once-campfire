@@ -67,6 +67,26 @@ public sealed class FirstRunTests
     }
 
     [Fact]
+    public async Task Create_StoresResolvedRemoteIp()
+    {
+        await using var host = new FirstRunHost();
+        using var client = host.CreateClient();
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/first_run")
+        {
+            Content = Form(
+                ("user[name]", "New Person"),
+                ("user[email_address]", "new@37signals.com"),
+                ("user[password]", "secret123456")),
+        };
+        request.Headers.TryAddWithoutValidation("X-Forwarded-For", "203.0.113.50");
+        using var response = await client.SendAsync(request);
+        Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
+
+        using var connection = host.Open();
+        Assert.Equal("203.0.113.50", Scalar(connection, "SELECT ip_address FROM sessions"));
+    }
+
+    [Fact]
     public async Task SecondRun_IsClosed()
     {
         await using var host = new FirstRunHost();

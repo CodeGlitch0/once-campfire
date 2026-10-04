@@ -1,4 +1,5 @@
 using Campfire.Web.Data;
+using Campfire.Web.Http;
 using Campfire.Web.Identity;
 
 namespace Campfire.Web.FirstRuns;
@@ -71,13 +72,13 @@ public static class FirstRunEndpoints
             form["user[name]"].ToString(),
             NullIfEmpty(form["user[email_address]"].ToString()),
             form["user[password]"].ToString(),
-            context.Connection.RemoteIpAddress?.ToString(),
+            RemoteIp.Resolve(context),
             context.Request.Headers.UserAgent.ToString()));
 
         if (outcome.Created && outcome.SessionToken is not null)
         {
-            var secret = SecretKey.Resolve(context.RequestServices.GetRequiredService<IConfiguration>());
-            SessionCookie.Write(context.Response, outcome.SessionToken, secret);
+            var secret = SecretKey.Resolve(context);
+            SessionCookie.Write(context.Response, outcome.SessionToken, secret, SslPolicy.SecureCookies(context));
         }
 
         return RedirectToRoot(context);

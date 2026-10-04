@@ -169,13 +169,25 @@ public static class Users
 
     public static void SetRole(SqliteConnection connection, long userId, string? role)
     {
-        var stored = role == "administrator" ? AdministratorRole : MemberRole;
+        var chosen = LastSubmitted(role);
+        var stored = chosen == "administrator" ? AdministratorRole : MemberRole;
         using var command = connection.CreateCommand();
         command.CommandText = "UPDATE users SET role = $role, updated_at = $updated WHERE id = $id";
         command.Parameters.AddWithValue("$role", stored);
         command.Parameters.AddWithValue("$updated", FirstRun.Timestamp());
         command.Parameters.AddWithValue("$id", userId);
         command.ExecuteNonQuery();
+    }
+
+    private static string? LastSubmitted(string? role)
+    {
+        if (string.IsNullOrEmpty(role))
+        {
+            return role;
+        }
+
+        var comma = role.LastIndexOf(',');
+        return (comma < 0 ? role : role[(comma + 1)..]).Trim();
     }
 
     public static void Deactivate(SqliteConnection connection, long userId)

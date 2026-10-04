@@ -8,20 +8,45 @@ public static class SecretKey
 {
     public const string Default = "campfire-development-secret-key-base";
 
-    public static string Resolve(IConfiguration configuration)
+    public static string Resolve(HttpContext context)
     {
-        var configured = configuration["Campfire:SecretKeyBase"];
-        if (!string.IsNullOrWhiteSpace(configured))
+        return Resolve(
+            context.RequestServices.GetRequiredService<IConfiguration>(),
+            context.RequestServices.GetRequiredService<IHostEnvironment>());
+    }
+
+    /// <summary>
+    /// Development may fall back to <see cref="Default"/>. Every other environment refuses
+    /// a missing secret and refuses that constant. Call this at startup so the process
+    /// does not sign cookies or transfer ids with the development constant.
+    /// </summary>
+    public static string Resolve(IConfiguration configuration, IHostEnvironment environment)
+    {
+        var configured = FirstNonEmpty(configuration["Campfire:SecretKeyBase"], configuration["SECRET_KEY_BASE"]);
+        if (environment.IsDevelopment())
         {
-            return configured;
+            return configured ?? Default;
         }
 
-        var fromEnv = configuration["SECRET_KEY_BASE"];
-        if (!string.IsNullOrWhiteSpace(fromEnv))
+        if (configured is null || configured == Default)
         {
-            return fromEnv;
+            throw new InvalidOperationException(
+                "Refusing to start: signing secret is missing or is the development constant. Set SECRET_KEY_BASE.");
         }
 
-        return Default;
+        return configured;
+    }
+
+    private static string? FirstNonEmpty(params string?[] values)
+    {
+        foreach (var value in values)
+        {
+            if (!string.IsNullOrWhiteSpace(value))
+            {
+                return value;
+            }
+        }
+
+        return null;
     }
 }

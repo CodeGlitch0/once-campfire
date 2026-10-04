@@ -73,8 +73,14 @@ public static class PostedForm
         using var stream = file.OpenReadStream();
         using var memory = new MemoryStream();
         await stream.CopyToAsync(memory);
-        var type = string.IsNullOrWhiteSpace(file.ContentType) ? "application/octet-stream" : file.ContentType;
+        var bytes = memory.ToArray();
+        var sniffed = ImageSniff.Detect(bytes);
+        if (sniffed is null)
+        {
+            return null;
+        }
+
         var filename = string.IsNullOrWhiteSpace(file.FileName) ? "blob" : Path.GetFileName(file.FileName);
-        return new BlobPayload(filename, type, memory.ToArray());
+        return new BlobPayload(filename, sniffed, bytes);
     }
 }

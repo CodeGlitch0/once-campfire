@@ -26,7 +26,7 @@ public static class CampfirePipeline
             }
 
             var database = context.RequestServices.GetRequiredService<CampfireDatabase>();
-            var secret = SecretKey.Resolve(context.RequestServices.GetRequiredService<IConfiguration>());
+            var secret = SecretKey.Resolve(context);
             using (var connection = database.Open())
             {
                 var token = SessionCookie.ReadToken(context.Request, secret);

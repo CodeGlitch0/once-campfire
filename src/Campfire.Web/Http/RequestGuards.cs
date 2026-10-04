@@ -76,7 +76,7 @@ public static class RequestGuards
     {
         if (!request.Headers.TryGetValue("Sec-Fetch-Site", out var values) || string.IsNullOrEmpty(values.ToString()))
         {
-            return !request.IsHttps;
+            return !SslPolicy.TreatAsHttps(request);
         }
 
         return values.ToString().ToLowerInvariant() switch

@@ -2,7 +2,9 @@ using System.Globalization;
 using System.Net;
 using Campfire.Web.Http;
 using Campfire.Web.Identity;
+using Campfire.Web.Sessions;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Data.Sqlite;
 
@@ -284,6 +286,144 @@ public sealed class SessionTests
         Assert.Equal(HttpStatusCode.NotFound, (await client.PutAsync("/session", new StringContent(""))).StatusCode);
     }
 
+    [Fact]
+    public async Task PostSession_WithMethodDelete_EndsSessionAndClearsCookie()
+    {
+        await using var host = new SessionHost();
+        using var client = host.CreateClient();
+        await CreateAdmin(client, "admin@example.com");
+        var signed = await Login(client, "admin@example.com", "secret123456");
+        string token;
+        using (var connection = host.Open())
+        {
+            token = RailsMessages.ReadSessionToken(signed, SecretKey.Default)!;
+            Assert.NotNull(Scalar(connection, "SELECT id FROM sessions WHERE token = $token", ("$token", token)));
+        }
+
+        using var logout = new HttpRequestMessage(HttpMethod.Post, "/session")
+        {
+            Content = Form(("_method", "delete")),
+        };
+        logout.Headers.TryAddWithoutValidation("Cookie", $"session_token={signed}");
+        using var response = await client.SendAsync(logout);
+
+        Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
+        Assert.Equal("/", response.Headers.Location?.AbsolutePath);
+        Assert.True(response.Headers.TryGetValues("Set-Cookie", out var cleared));
+        var clearedHeader = string.Join("\n", cleared!);
+        Assert.Contains("session_token=;", clearedHeader, StringComparison.Ordinal);
+        Assert.DoesNotContain("; secure", clearedHeader, StringComparison.OrdinalIgnoreCase);
+
+        using var connectionAfter = host.Open();
+        Assert.Null(Scalar(connectionAfter, "SELECT id FROM sessions WHERE token = $token", ("$token", token)));
+    }
+
+    [Fact]
+    public async Task EleventhSessionCreate_InsideWindow_IsLimited()
+    {
+        await using var host = new SessionHost();
+        using var client = host.CreateClient();
+        await CreateAdmin(client, "admin@example.com");
+
+        for (var attempt = 1; attempt <= 10; attempt++)
+        {
+            using var response = await client.PostAsync("/session", Form(
+                ("email_address", "admin@example.com"),
+                ("password", "wrong-password")));
+            Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        }
+
+        using var limited = await client.PostAsync("/session", Form(
+            ("email_address", "admin@example.com"),
+            ("password", "secret123456")));
+        Assert.Equal(HttpStatusCode.TooManyRequests, limited.StatusCode);
+        Assert.Contains("Too many requests or unauthorized.", await limited.Content.ReadAsStringAsync(), StringComparison.Ordinal);
+
+        using var connection = host.Open();
+        Assert.Equal(1L, Count(connection, "sessions"));
+    }
+
+    [Fact]
+    public void LoginRateLimit_EvictsIdleAddressesWhenWindowSlides()
+    {
+        var limit = new LoginRateLimit();
+        var start = DateTimeOffset.Parse("2026-01-01T00:00:00Z", CultureInfo.InvariantCulture);
+        Assert.False(limit.IsLimited("203.0.113.1", start));
+        Assert.False(limit.IsLimited("203.0.113.2", start));
+        Assert.Equal(2, limit.TrackedAddressCount);
+
+        Assert.False(limit.IsLimited("203.0.113.3", start.AddMinutes(4)));
+        Assert.Equal(1, limit.TrackedAddressCount);
+    }
+
+    [Fact]
+    public async Task AssumeSsl_SetsSecureOnWriteAndClear_AndTreatsFetchSiteAsHttps()
+    {
+        await using var host = new SessionHost(builder => builder.UseSetting("Campfire:AssumeSsl", "true"));
+        using var client = host.CreateClient();
+
+        using (var setup = new HttpRequestMessage(HttpMethod.Post, "/first_run")
+        {
+            Content = Form(
+                ("user[name]", "Admin"),
+                ("user[email_address]", "admin@example.com"),
+                ("user[password]", "secret123456")),
+        })
+        {
+            setup.Headers.TryAddWithoutValidation("Sec-Fetch-Site", "same-origin");
+            using var created = await client.SendAsync(setup);
+            Assert.Equal(HttpStatusCode.Redirect, created.StatusCode);
+        }
+
+        using (var missing = new HttpRequestMessage(HttpMethod.Post, "/session")
+        {
+            Content = Form(("email_address", "admin@example.com"), ("password", "secret123456")),
+        })
+        {
+            using var rejected = await client.SendAsync(missing);
+            Assert.Equal(HttpStatusCode.UnprocessableEntity, rejected.StatusCode);
+        }
+
+        using var login = new HttpRequestMessage(HttpMethod.Post, "/session")
+        {
+            Content = Form(("email_address", "admin@example.com"), ("password", "secret123456")),
+        };
+        login.Headers.TryAddWithoutValidation("Sec-Fetch-Site", "same-origin");
+        using var response = await client.SendAsync(login);
+        Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
+        Assert.True(response.Headers.TryGetValues("Set-Cookie", out var setCookie));
+        var written = string.Join("\n", setCookie!);
+        Assert.Contains("; secure", written, StringComparison.OrdinalIgnoreCase);
+        var signed = SessionCookie.ValueFromSetCookieHeader(written);
+        Assert.False(string.IsNullOrEmpty(signed));
+
+        using var logout = new HttpRequestMessage(HttpMethod.Delete, "/session");
+        logout.Headers.TryAddWithoutValidation("Cookie", $"session_token={signed}");
+        logout.Headers.TryAddWithoutValidation("Sec-Fetch-Site", "same-origin");
+        using var cleared = await client.SendAsync(logout);
+        Assert.Equal(HttpStatusCode.Redirect, cleared.StatusCode);
+        Assert.True(cleared.Headers.TryGetValues("Set-Cookie", out var clearCookie));
+        Assert.Contains("; secure", string.Join("\n", clearCookie!), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task ForwardedProtoHttps_DoesNotSetSecureCookie()
+    {
+        await using var host = new SessionHost();
+        using var client = host.CreateClient();
+        await CreateAdmin(client, "admin@example.com");
+
+        using var login = new HttpRequestMessage(HttpMethod.Post, "/session")
+        {
+            Content = Form(("email_address", "admin@example.com"), ("password", "secret123456")),
+        };
+        login.Headers.TryAddWithoutValidation("X-Forwarded-Proto", "https");
+        using var response = await client.SendAsync(login);
+        Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
+        Assert.True(response.Headers.TryGetValues("Set-Cookie", out var setCookie));
+        Assert.DoesNotContain("; secure", string.Join("\n", setCookie!), StringComparison.OrdinalIgnoreCase);
+    }
+
     private static async Task CreateAdmin(HttpClient client, string email)
     {
         using var response = await client.PostAsync("/first_run", Form(
@@ -344,12 +484,13 @@ public sealed class SessionTests
         private readonly string _path;
         private readonly WebApplicationFactory<Program> _factory;
 
-        public SessionHost()
+        public SessionHost(Action<IWebHostBuilder>? configure = null)
         {
             _path = Path.Combine(Path.GetTempPath(), $"campfire-session-{Guid.NewGuid():N}.sqlite");
             _factory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
             {
                 builder.UseSetting("Campfire:DatabasePath", _path);
+                configure?.Invoke(builder);
             });
         }
 

@@ -213,7 +213,11 @@ public static class UserEndpoints
             Attachments.AvatarName);
         if (stored is not null)
         {
-            return Responses.InlineBytes(stored.Value.Bytes, stored.Value.ContentType);
+            var image = ImageResponses.Avatar(stored.Value.Bytes);
+            if (image is not null)
+            {
+                return image;
+            }
         }
 
         if (user.Value.Role == UserStore.BotRole)
@@ -322,12 +326,12 @@ public static class UserEndpoints
 
     private static void WriteSession(HttpContext context, string token)
     {
-        SessionCookie.Write(context.Response, token, Secret(context));
+        SessionCookie.Write(context.Response, token, Secret(context), SslPolicy.SecureCookies(context));
     }
 
     private static string Secret(HttpContext context)
     {
-        return SecretKey.Resolve(context.RequestServices.GetRequiredService<IConfiguration>());
+        return SecretKey.Resolve(context);
     }
 
     private static string? UserAgent(HttpRequest request)

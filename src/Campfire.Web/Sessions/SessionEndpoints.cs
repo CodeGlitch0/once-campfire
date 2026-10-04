@@ -98,7 +98,7 @@ public static class SessionEndpoints
         }
 
         SessionStore.Destroy(connection, sessionId);
-        SessionCookie.Clear(context.Response);
+        SessionCookie.Clear(context.Response, SslPolicy.SecureCookies(context));
         return Redirect(context, "/");
     }
 
@@ -151,12 +151,12 @@ public static class SessionEndpoints
 
     private static void WriteSessionCookie(HttpContext context, string token)
     {
-        SessionCookie.Write(context.Response, token, Secret(context));
+        SessionCookie.Write(context.Response, token, Secret(context), SslPolicy.SecureCookies(context));
     }
 
     private static string Secret(HttpContext context)
     {
-        return SecretKey.Resolve(context.RequestServices.GetRequiredService<IConfiguration>());
+        return SecretKey.Resolve(context);
     }
 
     private static IResult Redirect(HttpContext context, string path)

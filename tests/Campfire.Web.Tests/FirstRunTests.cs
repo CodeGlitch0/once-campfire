@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Http.Headers;
 using Campfire.Web.Data;
 using Campfire.Web.Identity;
 using Microsoft.AspNetCore.Mvc.Testing;
@@ -64,6 +65,48 @@ public sealed class FirstRunTests
         var signed = SessionCookie.ValueFromSetCookieHeader(cookie);
         Assert.False(string.IsNullOrEmpty(signed));
         Assert.Equal(token, RailsMessages.ReadSessionToken(signed, SecretKey.Default));
+    }
+
+    [Fact]
+    public async Task Show_IncludesAvatarField_AndCreate_StoresAvatarBytes()
+    {
+        await using var host = new FirstRunHost();
+        using var client = host.CreateClient();
+        using (var open = await client.GetAsync("/first_run"))
+        {
+            Assert.Equal(HttpStatusCode.OK, open.StatusCode);
+            var html = await open.Content.ReadAsStringAsync();
+            Assert.Contains("name=\"user[avatar]\"", html, StringComparison.Ordinal);
+            var fieldAt = html.IndexOf("name=\"user[avatar]\"", StringComparison.Ordinal);
+            var formAt = html.LastIndexOf("<form", fieldAt, StringComparison.Ordinal);
+            var tagEnd = html.IndexOf('>', formAt);
+            Assert.Contains("enctype=\"multipart/form-data\"", html[formAt..(tagEnd + 1)], StringComparison.Ordinal);
+        }
+
+        var png = new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x01, 0x02, 0x03, 0x04 };
+        using var content = new MultipartFormDataContent();
+        content.Add(new StringContent("New Person"), "user[name]");
+        content.Add(new StringContent("new@37signals.com"), "user[email_address]");
+        content.Add(new StringContent("secret123456"), "user[password]");
+        var file = new ByteArrayContent(png);
+        file.Headers.ContentType = new MediaTypeHeaderValue("image/png");
+        content.Add(file, "user[avatar]", "avatar.png");
+
+        using var response = await client.PostAsync("/first_run", content);
+        Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
+        Assert.Equal("/", response.Headers.Location?.AbsolutePath);
+
+        using var connection = host.Open();
+        var userId = (long)Scalar(connection, "SELECT id FROM users")!;
+        var stored = Attachments.Read(
+            connection,
+            Attachments.FilesRoot(host.DatabasePath),
+            Attachments.UserType,
+            userId,
+            Attachments.AvatarName);
+        Assert.NotNull(stored);
+        Assert.Equal(png, stored.Value.Bytes);
+        Assert.Equal("image/png", stored.Value.ContentType);
     }
 
     [Fact]
@@ -262,6 +305,8 @@ public sealed class FirstRunTests
             });
         }
 
+        public string DatabasePath => _path;
+
         public SqliteConnection Open()
         {
             var connection = new SqliteConnection($"Data Source={_path}");
@@ -275,6 +320,11 @@ public sealed class FirstRunTests
             TryDelete(_path);
             TryDelete(_path + "-wal");
             TryDelete(_path + "-shm");
+            var files = _path + ".files";
+            if (Directory.Exists(files))
+            {
+                Directory.Delete(files, recursive: true);
+            }
         }
     }
 }

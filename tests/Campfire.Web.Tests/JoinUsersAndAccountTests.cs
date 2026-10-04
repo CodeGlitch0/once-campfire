@@ -751,6 +751,162 @@ public sealed class JoinUsersAndAccountTests
         }
     }
 
+    [Fact]
+    public async Task FileInputForms_RenderedHtml_SetsMultipartEnctype()
+    {
+        await using var host = new Host();
+        using var client = host.CreateClient();
+        var adminCookie = await FirstRun(client, "Admin", "admin@example.com");
+        var code = await JoinCode(host);
+
+        using (var join = await client.GetAsync("/join/" + code))
+        {
+            Assert.Equal(HttpStatusCode.OK, join.StatusCode);
+            AssertFileInputFormEnctype(await join.Content.ReadAsStringAsync(), "user[avatar]");
+        }
+
+        using (var profile = await Send(client, HttpMethod.Get, "/users/me/profile", adminCookie))
+        {
+            Assert.Equal(HttpStatusCode.OK, profile.StatusCode);
+            AssertFileInputFormEnctype(await profile.Content.ReadAsStringAsync(), "user[avatar]");
+        }
+
+        using var edit = await Send(client, HttpMethod.Get, "/account/edit", adminCookie);
+        Assert.Equal(HttpStatusCode.OK, edit.StatusCode);
+        AssertFileInputFormEnctype(await edit.Content.ReadAsStringAsync(), "account[logo]");
+    }
+
+    [Fact]
+    public async Task AccountEdit_DeactivateControl_IsShownForAnotherActiveUser_NotForSelf()
+    {
+        await using var host = new Host();
+        using var client = host.CreateClient();
+        var adminCookie = await FirstRun(client, "Admin Person", "admin@example.com");
+        await Join(client, await JoinCode(host), "Member Person", "member@example.com");
+        long adminId;
+        long memberId;
+        using (var connection = host.Open())
+        {
+            adminId = (long)Scalar(connection, "SELECT id FROM users WHERE email_address = 'admin@example.com'")!;
+            memberId = (long)Scalar(connection, "SELECT id FROM users WHERE email_address = 'member@example.com'")!;
+        }
+
+        using var edit = await Send(client, HttpMethod.Get, "/account/edit", adminCookie);
+        var html = await edit.Content.ReadAsStringAsync();
+        var memberControl = $"<form method=\"post\" action=\"/account/users/{memberId}\"><input type=\"hidden\" name=\"_method\" value=\"delete\"><button type=\"submit\">Delete Member Person</button></form>";
+        Assert.Contains(memberControl, html, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            $"<form method=\"post\" action=\"/account/users/{adminId}\"><input type=\"hidden\" name=\"_method\" value=\"delete\">",
+            html,
+            StringComparison.Ordinal);
+
+        using var removed = await Send(
+            client,
+            HttpMethod.Post,
+            "/account/users/" + memberId,
+            adminCookie,
+            Form(("_method", "delete")));
+        Assert.Equal(HttpStatusCode.Redirect, removed.StatusCode);
+        Assert.Equal("/account/edit", removed.Headers.Location?.AbsolutePath);
+        using var connectionAfter = host.Open();
+        Assert.Equal(1L, Scalar(connectionAfter, "SELECT status FROM users WHERE id = $id", ("$id", memberId)));
+    }
+
+    [Fact]
+    public async Task AccountEdit_InviteField_IsAbsoluteJoinUrl()
+    {
+        await using var host = new Host();
+        using var client = host.CreateClient();
+        var adminCookie = await FirstRun(client);
+        var code = await JoinCode(host);
+
+        using var edit = await Send(client, HttpMethod.Get, "/account/edit", adminCookie);
+        var html = await edit.Content.ReadAsStringAsync();
+        var value = InputValue(html, "invite_url");
+        var expected = client.BaseAddress!.GetLeftPart(UriPartial.Authority) + "/join/" + code;
+        Assert.Equal(expected, value);
+        var uri = new Uri(value);
+        Assert.True(uri.IsAbsoluteUri);
+        Assert.False(string.IsNullOrEmpty(uri.Scheme));
+        Assert.False(string.IsNullOrEmpty(uri.Host));
+        Assert.Equal("/join/" + code, uri.AbsolutePath);
+        Assert.DoesNotContain("value=\"/join/", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AccountEdit_WhenLogoStored_RendersDeleteControl_AndSubmittingRemovesIt()
+    {
+        await using var host = new Host();
+        using var client = host.CreateClient();
+        var adminCookie = await FirstRun(client);
+        const string control = "<form method=\"post\" action=\"/account/logo\"><input type=\"hidden\" name=\"_method\" value=\"delete\"><button type=\"submit\">Delete logo</button></form>";
+
+        using (var before = await Send(client, HttpMethod.Get, "/account/edit", adminCookie))
+        {
+            Assert.DoesNotContain(control, await before.Content.ReadAsStringAsync(), StringComparison.Ordinal);
+        }
+
+        using (var uploaded = await Send(
+            client,
+            HttpMethod.Put,
+            "/account",
+            adminCookie,
+            Multipart("account[logo]", "logo.png", "image/png", LogoBytes)))
+        {
+            Assert.Equal(HttpStatusCode.Redirect, uploaded.StatusCode);
+        }
+
+        using (var edit = await Send(client, HttpMethod.Get, "/account/edit", adminCookie))
+        {
+            Assert.Contains(control, await edit.Content.ReadAsStringAsync(), StringComparison.Ordinal);
+        }
+
+        using var removed = await Send(client, HttpMethod.Post, "/account/logo", adminCookie, Form(("_method", "delete")));
+        Assert.Equal(HttpStatusCode.Redirect, removed.StatusCode);
+        Assert.Equal("/account/edit", removed.Headers.Location?.AbsolutePath);
+
+        using (var after = await client.GetAsync("/account/logo"))
+        {
+            Assert.NotEqual(LogoBytes, await after.Content.ReadAsByteArrayAsync());
+        }
+
+        using (var connection = host.Open())
+        {
+            var accountId = (long)Scalar(connection, "SELECT id FROM accounts")!;
+            Assert.False(Attachments.Attached(connection, Attachments.AccountType, accountId, Attachments.LogoName));
+        }
+
+        using var gone = await Send(client, HttpMethod.Get, "/account/edit", adminCookie);
+        Assert.DoesNotContain("Delete logo", await gone.Content.ReadAsStringAsync(), StringComparison.Ordinal);
+    }
+
+    private static void AssertFileInputFormEnctype(string html, string fieldName)
+    {
+        var fieldAt = html.IndexOf($"name=\"{fieldName}\"", StringComparison.Ordinal);
+        Assert.True(fieldAt >= 0, html);
+        var formAt = html.LastIndexOf("<form", fieldAt, StringComparison.Ordinal);
+        Assert.True(formAt >= 0, html);
+        var tagEnd = html.IndexOf('>', formAt);
+        Assert.True(tagEnd > formAt, html);
+        Assert.Contains("enctype=\"multipart/form-data\"", html[formAt..(tagEnd + 1)], StringComparison.Ordinal);
+    }
+
+    private static string InputValue(string html, string id)
+    {
+        var at = html.IndexOf($"id=\"{id}\"", StringComparison.Ordinal);
+        Assert.True(at >= 0, html);
+        var tagEnd = html.IndexOf('>', at);
+        Assert.True(tagEnd > at, html);
+        var tag = html[at..tagEnd];
+        const string marker = "value=\"";
+        var valueAt = tag.IndexOf(marker, StringComparison.Ordinal);
+        Assert.True(valueAt >= 0, tag);
+        var start = valueAt + marker.Length;
+        var end = tag.IndexOf('"', start);
+        Assert.True(end > start, tag);
+        return System.Net.WebUtility.HtmlDecode(tag[start..end]);
+    }
+
     private static string TransferPath(string html)
     {
         const string marker = "/session/transfers/";

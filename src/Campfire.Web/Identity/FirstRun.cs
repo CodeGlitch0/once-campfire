@@ -25,15 +25,28 @@ public static class FirstRun
     public const int AdministratorRole = 1;
     public const int ActiveStatus = 0;
 
-    public static FirstRunOutcome TryCreate(SqliteConnection connection, FirstRunRequest request)
+    public static FirstRunOutcome TryCreate(
+        SqliteConnection connection,
+        FirstRunRequest request,
+        string? filesRoot = null,
+        BlobPayload? avatar = null)
     {
         var timestamp = Timestamp();
+        string? stagedKey = null;
+        string? stagedPath = null;
+        if (avatar is not null && !string.IsNullOrEmpty(filesRoot))
+        {
+            stagedKey = Attachments.NewKey();
+            stagedPath = Attachments.Stage(filesRoot, stagedKey, avatar.Value.Bytes);
+        }
+
         using var transaction = connection.BeginTransaction();
         try
         {
             if (Accounts.Any(connection, transaction))
             {
                 transaction.Rollback();
+                Attachments.DeleteFile(stagedPath);
                 return FirstRunOutcome.Closed;
             }
 
@@ -44,10 +57,23 @@ public static class FirstRun
             catch (SqliteException exception) when (Accounts.IsSingletonViolation(exception))
             {
                 transaction.Rollback();
+                Attachments.DeleteFile(stagedPath);
                 return FirstRunOutcome.Closed;
             }
 
             var userId = InsertUser(connection, transaction, request, timestamp);
+            if (avatar is not null && stagedKey is not null)
+            {
+                Attachments.Insert(
+                    connection,
+                    transaction,
+                    Attachments.UserType,
+                    userId,
+                    Attachments.AvatarName,
+                    stagedKey,
+                    avatar.Value,
+                    timestamp);
+            }
             var roomId = InsertRoom(connection, transaction, userId, timestamp);
             // One membership: FirstRun grants the admin, and the user/open-room callbacks would
             // insert the same (room_id, user_id). The unique index allows one row (user.rooms.one?).
@@ -59,6 +85,7 @@ public static class FirstRun
         catch
         {
             RollbackQuietly(transaction);
+            Attachments.DeleteFile(stagedPath);
             throw;
         }
     }

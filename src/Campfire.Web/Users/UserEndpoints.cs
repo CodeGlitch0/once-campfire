@@ -356,7 +356,7 @@ public static class UserEndpoints
             <html>
             <head><title>Sign up</title></head>
             <body class="signup">
-            <form action="/join/{Responses.Encode(joinCode)}" method="post">
+            <form action="/join/{Responses.Encode(joinCode)}" method="post" enctype="multipart/form-data">
               <strong>{Responses.Encode(accountName)}</strong>
               <label>Name <input name="user[name]" autocomplete="name" placeholder="Name" required autofocus></label>
               <label>Email address <input type="email" name="user[email_address]" autocomplete="username" placeholder="Email address" required></label>
@@ -445,7 +445,7 @@ public static class UserEndpoints
             <form action="/session" method="post"><input type="hidden" name="_method" value="delete"><button type="submit">Log out</button></form>
             <img src="/users/{Responses.Encode(avatarToken)}/avatar" alt="">
             <form action="/users/me/avatar" method="post"><input type="hidden" name="_method" value="delete"><button type="submit">Delete avatar</button></form>
-            <form action="/users/me/profile" method="post">
+            <form action="/users/me/profile" method="post" enctype="multipart/form-data">
               <input type="hidden" name="_method" value="patch">
               <label>Name <input name="user[name]" value="{Responses.Encode(user.Name)}" autocomplete="name" required></label>
               <label>Email address <input type="email" name="user[email_address]" value="{Responses.Encode(user.EmailAddress)}" autocomplete="username"></label>

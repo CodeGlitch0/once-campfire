@@ -180,6 +180,28 @@ public static class Attachments
         return new StoredBlob(File.ReadAllBytes(path), contentType, filename);
     }
 
+    /// <summary>Rails <c>attached?</c>: an attachment row exists, even if the file is missing.</summary>
+    public static bool Attached(
+        SqliteConnection connection,
+        string recordType,
+        long recordId,
+        string name)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT 1
+            FROM active_storage_attachments
+            WHERE record_type = $type
+              AND record_id = $id
+              AND name = $name
+            LIMIT 1
+            """;
+        command.Parameters.AddWithValue("$type", recordType);
+        command.Parameters.AddWithValue("$id", recordId);
+        command.Parameters.AddWithValue("$name", name);
+        return command.ExecuteScalar() is not null;
+    }
+
     public static void Destroy(
         SqliteConnection connection,
         string filesRoot,

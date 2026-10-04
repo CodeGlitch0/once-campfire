@@ -12,10 +12,11 @@ public static class FirstRunEndpoints
         <html>
         <head><title>Set up Campfire</title></head>
         <body>
-        <form action="/first_run" method="post">
+        <form action="/first_run" method="post" enctype="multipart/form-data">
         <label>Name <input name="user[name]" autocomplete="name" required autofocus></label>
         <label>Email address <input type="email" name="user[email_address]" autocomplete="username" required></label>
         <label>Password <input type="password" name="user[password]" autocomplete="new-password" maxlength="72" required></label>
+        <label>Avatar <input type="file" name="user[avatar]" accept="image/*"></label>
         <button type="submit">Save</button>
         </form>
         </body>
@@ -68,12 +69,16 @@ public static class FirstRunEndpoints
             return Results.BadRequest();
         }
 
-        var outcome = FirstRun.TryCreate(connection, new FirstRunRequest(
-            form["user[name]"].ToString(),
-            NullIfEmpty(form["user[email_address]"].ToString()),
-            form["user[password]"].ToString(),
-            RemoteIp.Resolve(context),
-            context.Request.Headers.UserAgent.ToString()));
+        var outcome = FirstRun.TryCreate(
+            connection,
+            new FirstRunRequest(
+                form["user[name]"].ToString(),
+                NullIfEmpty(form["user[email_address]"].ToString()),
+                form["user[password]"].ToString(),
+                RemoteIp.Resolve(context),
+                context.Request.Headers.UserAgent.ToString()),
+            Attachments.FilesRoot(database.Path),
+            await PostedForm.File(form, "user[avatar]"));
 
         if (outcome.Created && outcome.SessionToken is not null)
         {

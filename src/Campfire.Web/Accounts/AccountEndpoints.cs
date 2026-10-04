@@ -58,7 +58,13 @@ public static class AccountEndpoints
         var users = UserStore.List(connection, includeBanned: admin, PageSize, 0);
         var administrators = users.Where(user => user.Role == UserStore.AdministratorRole).ToList();
         var members = users.Where(user => user.Role != UserStore.AdministratorRole).ToList();
-        return Responses.Html(RenderEdit(account.Value, admin, administrators, members));
+        var inviteUrl = $"{context.Request.Scheme}://{context.Request.Host}/join/{account.Value.JoinCode}";
+        var logoAttached = Attachments.Attached(
+            connection,
+            Attachments.AccountType,
+            account.Value.Id,
+            Attachments.LogoName);
+        return Responses.Html(RenderEdit(account.Value, admin, viewerId, administrators, members, inviteUrl, logoAttached));
     }
 
     private static async Task<IResult> UpdateAccount(HttpContext context, CampfireDatabase database)
@@ -325,25 +331,32 @@ public static class AccountEndpoints
     private static string RenderEdit(
         AccountStore.AccountRow account,
         bool admin,
+        long viewerId,
         IReadOnlyList<UserRow> administrators,
-        IReadOnlyList<UserRow> members)
+        IReadOnlyList<UserRow> members,
+        string inviteUrl,
+        bool logoAttached)
     {
-        var adminItems = string.Concat(administrators.Select(user => UserItem(user, admin)));
-        var memberItems = string.Concat(members.Select(user => UserItem(user, admin)));
+        var adminItems = string.Concat(administrators.Select(user => UserItem(user, admin, viewerId)));
+        var memberItems = string.Concat(members.Select(user => UserItem(user, admin, viewerId)));
         var divider = administrators.Count > 0 && members.Count > 0
             ? "<hr class=\"separator full-width\">"
             : "";
         var regenerate = admin
             ? "<form method=\"post\" action=\"/account/join_code\"><button type=\"submit\">Regenerate join link</button></form>"
             : "";
+        var logoDelete = admin && logoAttached
+            ? "<form method=\"post\" action=\"/account/logo\"><input type=\"hidden\" name=\"_method\" value=\"delete\"><button type=\"submit\">Delete logo</button></form>"
+            : "";
         var nameField = admin
             ? $"""
-                <form action="/account" method="post">
+                <form action="/account" method="post" enctype="multipart/form-data">
                   <input type="hidden" name="_method" value="patch">
                   <input name="account[name]" aria-label="Account name" value="{Responses.Encode(account.Name)}">
                   <input type="file" name="account[logo]" accept="image/*" aria-label="Upload logo">
                   <button type="submit">Save changes</button>
                 </form>
+                {logoDelete}
                 """
             : $"<h1>{Responses.Encode(account.Name)}</h1>";
         return $"""
@@ -354,7 +367,7 @@ public static class AccountEndpoints
             {(admin ? "<a href=\"/account/custom_styles/edit\">Custom styles</a>" : "")}
             {nameField}
             <p id="invite_label">Share to invite more people</p>
-            <input id="invite_url" readonly aria-labelledby="invite_label" value="/join/{Responses.Encode(account.JoinCode)}">
+            <input id="invite_url" readonly aria-labelledby="invite_label" value="{Responses.Encode(inviteUrl)}">
             {regenerate}
             <turbo-frame id="account_users">
               {adminItems}
@@ -366,7 +379,7 @@ public static class AccountEndpoints
             """;
     }
 
-    private static string UserItem(UserRow user, bool admin)
+    private static string UserItem(UserRow user, bool admin, long viewerId)
     {
         var id = user.Id.ToString(System.Globalization.CultureInfo.InvariantCulture);
         var controls = "";
@@ -381,6 +394,12 @@ public static class AccountEndpoints
                   <button type="submit" name="commit">Save role</button>
                 </form>
                 """;
+        }
+
+        // Rails button_to account_user_path, method: :delete — hidden for the current user.
+        if (admin && user.Status == UserStore.ActiveStatus && user.Id != viewerId)
+        {
+            controls += $"<form method=\"post\" action=\"/account/users/{id}\"><input type=\"hidden\" name=\"_method\" value=\"delete\"><button type=\"submit\">Delete {Responses.Encode(user.Name)}</button></form>";
         }
 
         return $"""

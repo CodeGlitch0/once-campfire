@@ -26,6 +26,7 @@ public static class RailsMessages
     public const string SessionCookiePurpose = "cookie.session_token";
     public const string SignedIdSalt = "active_record/signed_id";
     public const string TransferPurpose = "user/transfer";
+    public const string AvatarPurpose = "user/avatar";
     public static readonly TimeSpan TransferLifetime = TimeSpan.FromHours(4);
 
     private static readonly JsonSerializerOptions Json = new()
@@ -97,6 +98,40 @@ public static class RailsMessages
         }
 
         if (!TryReadEnvelope(envelope, TransferPurpose, out _, out var data))
+        {
+            return null;
+        }
+
+        if (data.ValueKind == JsonValueKind.Number && data.TryGetInt64(out var id))
+        {
+            return id;
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Rails <c>signed_id(purpose: :avatar)</c>: same verifier as transfer ids, no expiry.
+    /// </summary>
+    public static string SignRecordId(long id, string purpose, string secret)
+    {
+        var envelope = "{\"_rails\":{\"data\":" + id.ToString(CultureInfo.InvariantCulture) + ",\"pur\":\"" + purpose + "\"}}";
+        return Sign(envelope, DeriveKey(secret, SignedIdSalt), HashAlgorithmName.SHA256, urlSafe: true);
+    }
+
+    public static long? ReadRecordId(string? signed, string purpose, string secret)
+    {
+        if (string.IsNullOrEmpty(signed))
+        {
+            return null;
+        }
+
+        if (!TryOpen(signed, DeriveKey(secret, SignedIdSalt), HashAlgorithmName.SHA256, 64, out var envelope))
+        {
+            return null;
+        }
+
+        if (!TryReadEnvelope(envelope, purpose, out _, out var data))
         {
             return null;
         }

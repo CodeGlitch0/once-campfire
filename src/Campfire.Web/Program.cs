@@ -12,6 +12,8 @@ app.MapGet("/up", () => Results.Text("ok", "text/plain"));
 CampfirePipeline.Use(app);
 FirstRunEndpoints.Map(app);
 SessionEndpoints.Map(app);
+UserEndpoints.Map(app);
+AccountEndpoints.Map(app);
 
 app.Run();
 
